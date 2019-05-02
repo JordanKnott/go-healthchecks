@@ -14,15 +14,17 @@ import (
 	"time"
 )
 
-type SmtpConfig struct {
+// SMTPConfig contains a SMTP server's details
+type SMTPConfig struct {
 	Username string
 	Password string
 	Hostname string
 	Port     int
 }
 
+// Config contains all of application configuration information
 type Config struct {
-	SMTP SmtpConfig
+	SMTP SMTPConfig
 }
 
 // User blah
@@ -49,6 +51,7 @@ type Servers struct {
 	ServerList []Server
 }
 
+// AlertData is a list of server states that should be sent to users
 type AlertData struct {
 	DownServers []ServerStatus
 }
@@ -69,6 +72,7 @@ type LastRunDownServers struct {
 	RunTimeEnd   time.Time
 }
 
+// GetServerStatus is a testing function that returns a mock ServerStatus for a Server
 func GetServerStatus(targetServer Server) ServerStatus {
 	if targetServer.ID == 196 {
 		return ServerStatus{targetServer.ID, false, "404", targetServer.URL, time.Now()}
@@ -76,6 +80,7 @@ func GetServerStatus(targetServer Server) ServerStatus {
 	return ServerStatus{targetServer.ID, true, "", targetServer.URL, time.Now()}
 }
 
+// GetServerStatusReal tries to load a url for a given server and returns an appropriate ServerStatus
 func GetServerStatusReal(targetServer Server) ServerStatus {
 	res, err := http.Get(targetServer.URL)
 	if err != nil {
@@ -135,6 +140,7 @@ func LoadUsers() Users {
 	return users
 }
 
+// LoadLastRunState retrieves the last list of down servers to prevent sending an alert more than once
 func LoadLastRunState() LastRunDownServers {
 	if _, err := os.Stat("status.json"); os.IsNotExist(err) {
 		return LastRunDownServers{[]ServerStatus{}, time.Now(), time.Now()}
@@ -151,6 +157,7 @@ func LoadLastRunState() LastRunDownServers {
 	return lastRunState
 }
 
+// StatusExistsInLastRun checks if the given server exists in the last run based on ID
 func StatusExistsInLastRun(lastRun LastRunDownServers, targetStatus ServerStatus) bool {
 	for _, status := range lastRun.DownServers {
 		if status.ID == targetStatus.ID {
@@ -160,6 +167,7 @@ func StatusExistsInLastRun(lastRun LastRunDownServers, targetStatus ServerStatus
 	return false
 }
 
+// SaveLastRunState writes the new lastRunState to status.json
 func SaveLastRunState(lastRunState LastRunDownServers) {
 	// write new last run state
 	b, err := json.MarshalIndent(lastRunState, "", "  ")
@@ -172,6 +180,7 @@ func SaveLastRunState(lastRunState LastRunDownServers) {
 	}
 }
 
+// GenerateAlertMessage uses the go template alert.html to generate the alert email sent to users
 func GenerateAlertMessage(alertData AlertData) string {
 	var tpl bytes.Buffer
 	tmpl, err := ioutil.ReadFile("alert.html")
@@ -188,10 +197,13 @@ func GenerateAlertMessage(alertData AlertData) string {
 }
 
 func main() {
+	fmt.Println("Loading servers...")
+	// App setup
 	config := LoadConfig()
 	lastRunState := LoadLastRunState()
-	fmt.Println("Loading servers...")
 	servers := LoadServers()
+
+	// Check servers
 	currentRunState := []ServerStatus{}
 	lastRunState.RunTimeStart = time.Now()
 	for index, server := range servers.ServerList {
@@ -205,8 +217,9 @@ func main() {
 
 	}
 	lastRunState.RunTimeEnd = time.Now()
-	fmt.Printf("%v\n", lastRunState.RunTimeEnd.Sub(lastRunState.RunTimeStart))
+	fmt.Printf("Server Check Duration: %v\n", lastRunState.RunTimeEnd.Sub(lastRunState.RunTimeStart))
 
+	// Check if any down servers should be sent to users
 	shouldSend := false
 	shouldSendList := []ServerStatus{}
 	for _, status := range currentRunState {
@@ -218,6 +231,7 @@ func main() {
 		}
 	}
 
+	// Send out alerts if needed
 	alertData := AlertData{shouldSendList}
 	alertMessage := GenerateAlertMessage(alertData)
 	users := LoadUsers()
@@ -239,6 +253,7 @@ func main() {
 			}
 		}
 	}
+	// Save new run state
 	lastRunState.DownServers = currentRunState
 	fmt.Println("Saving current run state...")
 	SaveLastRunState(lastRunState)
