@@ -1,0 +1,7 @@
+<p>The following servers have non-200 status code!</p>
+<p>
+    <ul>
+        {{ range .DownServers }}<li>[{{ .ID }}] {{ .URL }} - {{ .Error }}</li>{{ end }}
+    </ul>
+</p>
+
