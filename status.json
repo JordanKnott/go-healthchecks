@@ -1,6 +1,34 @@
 {
   "DownServers": [
+    {
+      "ID": 62,
+      "IsUp": false,
+      "Error": "Get https://repairsxpress.com/: dial tcp 50.63.202.56:443: i/o timeout",
+      "URL": "repairsexpress.com",
+      "Date": "2019-05-06T14:44:30.092452997-05:00"
+    },
+    {
+      "ID": 64,
+      "IsUp": false,
+      "Error": "Get https://straubcollision.com: x509: certificate is valid for *.wpengine.com, wpengine.com, not straubcollision.com",
+      "URL": "straubcollision.com",
+      "Date": "2019-05-06T14:45:31.421790166-05:00"
+    },
+    {
+      "ID": 81,
+      "IsUp": false,
+      "Error": "Get https://homeofhope.com: x509: certificate is valid for *.wpengine.com, wpengine.com, not homeofhope.com",
+      "URL": "homeofhope.com",
+      "Date": "2019-05-06T14:45:38.860490976-05:00"
+    },
+    {
+      "ID": 110,
+      "IsUp": false,
+      "Error": "Get https://www.tiltonbodyworks.com: x509: certificate is valid for *.wpengine.com, wpengine.com, not www.tiltonbodyworks.com",
+      "URL": "www.tiltonbodyworks.com",
+      "Date": "2019-05-06T14:46:03.154305249-05:00"
+    }
   ],
-  "RunTimeStart": "2019-05-02T13:41:52.960094196-05:00",
-  "RunTimeEnd": "2019-05-02T13:41:52.960914943-05:00"
+  "RunTimeStart": "2019-05-06T14:41:12.126054165-05:00",
+  "RunTimeEnd": "2019-05-06T14:46:04.875997117-05:00"
 }

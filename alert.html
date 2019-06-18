@@ -1,7 +1,7 @@
 <p>The following servers have non-200 status code!</p>
 <p>
     <ul>
-        {{ range .DownServers }}<li>[{{ .ID }}] {{ .URL }} - {{ .Error }}</li>{{ end }}
+        {{ range .DownServers }}<li>[{{ .Error }}] {{ .URL }} @ {{ .Date.Format "Jan _2 15:04:05" }}</li>{{ end }}
     </ul>
 </p>
 

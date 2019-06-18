@@ -3,9 +3,14 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/BurntSushi/toml"
 	"github.com/go-mail/mail"
+	homedir "github.com/mitchellh/go-homedir"
+	log "github.com/sirupsen/logrus"
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 	"io/ioutil"
 	"net/http"
 	"os"
@@ -22,9 +27,21 @@ type SMTPConfig struct {
 	Port     int
 }
 
+// HealthcheckConfig contains general options
+type HealthcheckConfig struct {
+	TryWithBackoff bool
+}
+
+// DebugConfig contains debug options
+type DebugConfig struct {
+	MockFetch bool
+}
+
 // Config contains all of application configuration information
 type Config struct {
-	SMTP SMTPConfig
+	SMTP        SMTPConfig
+	Healthcheck HealthcheckConfig
+	Debug       DebugConfig
 }
 
 // User blah
@@ -34,6 +51,14 @@ type User struct {
 	Enabled  bool
 }
 
+type WebsiteFetcher interface {
+	Fetch(target Server) ServerStatus
+}
+
+type FetchWithBackoff struct{}
+
+type MockFetch struct{}
+
 // Users blah
 type Users struct {
 	UserList []User
@@ -41,9 +66,11 @@ type Users struct {
 
 // Server blah
 type Server struct {
-	ID    int
-	Label string
-	URL   string
+	ID       int
+	Label    string
+	URL      string
+	Install  string
+	Protocol string
 }
 
 // Servers blah
@@ -73,16 +100,47 @@ type LastRunDownServers struct {
 }
 
 // GetServerStatus is a testing function that returns a mock ServerStatus for a Server
-func GetServerStatus(targetServer Server) ServerStatus {
+func (f MockFetch) Fetch(targetServer Server) ServerStatus {
 	if targetServer.ID == 196 {
 		return ServerStatus{targetServer.ID, false, "404", targetServer.URL, time.Now()}
 	}
 	return ServerStatus{targetServer.ID, true, "", targetServer.URL, time.Now()}
 }
 
-// GetServerStatusReal tries to load a url for a given server and returns an appropriate ServerStatus
-func GetServerStatusReal(targetServer Server) ServerStatus {
-	res, err := http.Get(targetServer.URL)
+func (f FetchWithBackoff) Fetch(targetServer Server) ServerStatus {
+	currentCheck := 1
+	maxChecks := 3
+	var lastStatusCode int
+	var err error
+	for currentCheck < maxChecks {
+		log.WithFields(log.Fields{
+			"current_check": currentCheck,
+			"target":        targetServer.Protocol + targetServer.URL,
+		}).Info("fetching server status")
+		resp, newErr := http.Get(targetServer.Protocol + targetServer.URL)
+		if newErr != nil {
+			log.WithFields(log.Fields{
+				"error": err.Error(),
+			}).Error("an error occurred while fetching site")
+			err = newErr
+		} else {
+			err = nil
+		}
+		if resp.StatusCode == 200 {
+			return ServerStatus{
+				targetServer.ID,
+				true,
+				"",
+				targetServer.URL,
+				time.Now(),
+			}
+		}
+		time.Sleep(1 * time.Minute)
+		lastStatusCode = resp.StatusCode
+	}
+	log.WithFields(log.Fields{
+		"status_code": lastStatusCode,
+	}).Error("non 200 status code")
 	if err != nil {
 		return ServerStatus{
 			targetServer.ID,
@@ -92,22 +150,29 @@ func GetServerStatusReal(targetServer Server) ServerStatus {
 			time.Now(),
 		}
 	}
-	if res.StatusCode != 200 {
-		return ServerStatus{
-			targetServer.ID,
-			false,
-			strconv.Itoa(res.StatusCode),
-			targetServer.URL,
-			time.Now(),
-		}
-	}
 	return ServerStatus{
 		targetServer.ID,
-		true,
-		"",
+		false,
+		strconv.Itoa(lastStatusCode),
 		targetServer.URL,
 		time.Now(),
 	}
+}
+
+func IsWebsiteUp(url string) error {
+	res, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	if res.StatusCode != 200 {
+		return errors.New("Non 200 status code: " + strconv.Itoa(res.StatusCode))
+	}
+	return nil
+
+}
+
+func GetWebsiteStatus(fetcher WebsiteFetcher, target Server) ServerStatus {
+	return fetcher.Fetch(target)
 }
 
 // LoadConfig blah
@@ -196,37 +261,74 @@ func GenerateAlertMessage(alertData AlertData) string {
 	return tpl.String()
 }
 
-func main() {
-	fmt.Println("Loading servers...")
+func init() {
+	// Log as JSON instead of the default ASCII formatter.
+	textFormatter := &log.TextFormatter{}
+	textFormatter.FullTimestamp = true
+	log.SetFormatter(textFormatter)
+
+	// Output to stdout instead of the default stderr
+	// Can be any io.Writer, see below for File example
+	log.SetOutput(os.Stdout)
+
+	// Only log the warning severity or above.
+	// log.SetLevel(log.WarnLevel)
+}
+func checkSites() {
+	log.Info("loading config")
 	// App setup
 	config := LoadConfig()
 	lastRunState := LoadLastRunState()
 	servers := LoadServers()
 
+	var fetcher WebsiteFetcher
+
+	if config.Debug.MockFetch {
+		fetcher = MockFetch{}
+	} else {
+		fetcher = FetchWithBackoff{}
+	}
+
 	// Check servers
 	currentRunState := []ServerStatus{}
 	lastRunState.RunTimeStart = time.Now()
 	for index, server := range servers.ServerList {
-		fmt.Printf("[%d/%d] Checking %s (%d)...", index, len(servers.ServerList), server.URL, server.ID)
-		serverStatus := GetServerStatusReal(server)
+		log.WithFields(log.Fields{
+			"index":     index,
+			"total":     len(servers.ServerList),
+			"url":       server.URL,
+			"server_id": server.ID,
+		}).Info("checking server status")
+		serverStatus := GetWebsiteStatus(fetcher, server)
 		if !serverStatus.IsUp {
 			currentRunState = append(currentRunState, serverStatus)
+			log.WithFields(log.Fields{
+				"error": serverStatus.Error,
+			}).Error("target server has an error")
 		} else {
-			fmt.Printf(" OK\n")
+			log.Info("server is okay")
 		}
 
 	}
 	lastRunState.RunTimeEnd = time.Now()
-	fmt.Printf("Server Check Duration: %v\n", lastRunState.RunTimeEnd.Sub(lastRunState.RunTimeStart))
+	log.WithFields(log.Fields{
+		"duration": lastRunState.RunTimeEnd.Sub(lastRunState.RunTimeStart),
+	}).Info("server check complete")
 
 	// Check if any down servers should be sent to users
 	shouldSend := false
 	shouldSendList := []ServerStatus{}
 	for _, status := range currentRunState {
+		log.WithFields(log.Fields{
+			"status": status,
+		}).Info("comparing status against last run")
 		if !StatusExistsInLastRun(lastRunState, status) {
 			if !shouldSend {
 				shouldSend = true
 			}
+			log.WithFields(log.Fields{
+				"status": status,
+			}).Info("should be sent")
 			shouldSendList = append(shouldSendList, status)
 		}
 	}
@@ -255,6 +357,60 @@ func main() {
 	}
 	// Save new run state
 	lastRunState.DownServers = currentRunState
-	fmt.Println("Saving current run state...")
 	SaveLastRunState(lastRunState)
+}
+
+var cfgFile string
+var serversFile string
+var statusFile string
+var verbose bool
+
+func init() {
+	cobra.OnInitialize(initConfig)
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.servermon.yaml)")
+	rootCmd.PersistentFlags().StringVarP(&serversFile, "servers", "s", "servers.toml", "")
+	rootCmd.PersistentFlags().StringVarP(&serversFile, "servers", "s", "status.toml", "")
+	rootCmd.PersistentFlags().Bool("verbose", true, "show logs")
+	viper.BindPFlag("serversFile", rootCmd.PersistentFlags().Lookup("serversFile"))
+	viper.BindPFlag("statusFile", rootCmd.PersistentFlags().Lookup("statusFile"))
+	viper.BindPFlag("verbose", rootCmd.PersistentFlags().Lookup("verbose"))
+}
+
+func initConfig() {
+	// Don't forget to read config either from cfgFile or from home directory!
+	if cfgFile != "" {
+		// Use config file from the flag.
+		viper.SetConfigFile(cfgFile)
+	} else {
+		// Find home directory.
+		home, err := homedir.Dir()
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+
+		// Search config in home directory with name ".cobra" (without extension).
+		viper.AddConfigPath(home)
+		viper.SetConfigName(".servermon")
+	}
+
+	if err := viper.ReadInConfig(); err != nil {
+		fmt.Println("Can't read config:", err)
+		os.Exit(1)
+	}
+}
+
+var rootCmd = &cobra.Command{
+	Use:   "servermon",
+	Short: "Check server health",
+	Long:  "check server health",
+	Run: func(cmd *cobra.Command, args []string) {
+	},
+}
+
+func main() {
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
 }
